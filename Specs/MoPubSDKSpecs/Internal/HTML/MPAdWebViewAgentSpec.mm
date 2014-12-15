@@ -218,6 +218,25 @@ describe(@"MPAdWebViewAgent", ^{
                     delegate should have_received(@selector(adDidFailToLoadAd:)).with(agent.view);
                 });
             });
+            
+            context(@"when the host is 'jsclick'", ^{
+                it(@"should call handleManualClickThrough:", ^{
+                    NSURL *URL = [NSURL URLWithString:@"mopub://jsclick?destination=http%3A%2F%2Fwww.google.com"];
+                    [agent webView:agent.view shouldStartLoadWithRequest:[NSURLRequest requestWithURL:URL] navigationType:UIWebViewNavigationTypeOther] should equal(NO);
+                    agent should have_received(@selector(handleManualClickThrough:)).with(URL);
+                });
+            });
+            
+            
+            context(@"when the host is 'jsdeeplink'", ^{
+                it(@"should call handleManualDeeplinkThrough:", ^{
+                    NSURL *URL = [NSURL URLWithString:@"mopub://jsdeeplink?destination=liligo%3A%2F%2F&fallback=http%3A%2F%2Fwww.google.com&tracker=null"];
+                    [agent webView:agent.view shouldStartLoadWithRequest:[NSURLRequest requestWithURL:URL] navigationType:UIWebViewNavigationTypeOther] should equal(NO);
+                    agent should have_received(@selector(handleManualDeeplinkThrough:)).with(URL);
+                });
+            });
+
+            
 
             context(@"when the host is 'custom'", ^{
                 beforeEach(^{

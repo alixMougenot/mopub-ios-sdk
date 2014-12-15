@@ -35,6 +35,10 @@ typedef NSUInteger MPAdWebViewEvent;
 - (void)enableRequestHandling;
 - (void)disableRequestHandling;
 
+- (void) handleManualClickThrough:(NSURL*) url;
+- (void) handleManualDeeplinkThrough:(NSURL*) url;
+
+
 @end
 
 @class MPAdWebView;

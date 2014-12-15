@@ -30,7 +30,13 @@ NSString * const kMoPubURLScheme = @"mopub";
 NSString * const kMoPubCloseHost = @"close";
 NSString * const kMoPubFinishLoadHost = @"finishLoad";
 NSString * const kMoPubFailLoadHost = @"failLoad";
+NSString * const kMoPubJSClickThrough = @"jsclick";
+NSString * const kMoPubJSDeeplinkThrough = @"jsdeeplink";
 NSString * const kMoPubCustomHost = @"custom";
+NSString * const kMoPubClickParamDestination = @"destination";
+NSString * const kMoPubClickParamFallback = @"fallback";
+NSString * const kMoPubClickParamDeeplinkTracker = @"deeplinkTracker";
+
 
 @interface MPAdWebViewAgent () <UIGestureRecognizerDelegate>
 
@@ -45,6 +51,8 @@ NSString * const kMoPubCustomHost = @"custom";
 - (BOOL)shouldIntercept:(NSURL *)URL navigationType:(UIWebViewNavigationType)navigationType;
 - (void)interceptURL:(NSURL *)URL;
 - (void)handleMoPubCustomURL:(NSURL *)URL;
+- (void)pullTrackingPixel:(NSURL *)URL;
+- (void)injectJSHooksInWebViewContext;
 
 @end
 
@@ -65,6 +73,7 @@ NSString * const kMoPubCustomHost = @"custom";
     self = [super init];
     if (self) {
         self.view = [[MPInstanceProvider sharedProvider] buildMPAdWebViewWithFrame:frame delegate:self];
+        [self injectJSHooksInWebViewContext];
         self.destinationDisplayAgent = [[MPCoreInstanceProvider sharedProvider] buildMPAdDestinationDisplayAgentWithDelegate:self];
         self.delegate = delegate;
         self.customMethodDelegate = customMethodDelegate;
@@ -170,6 +179,43 @@ NSString * const kMoPubCustomHost = @"custom";
     self.shouldHandleRequests = YES;
 }
 
+
+-(void) handleManualClickThrough:(NSURL*) url {
+    NSDictionary* content = [url mp_queryAsDictionary];
+    NSString* destination = [content valueForKey:kMoPubClickParamDestination];
+    NSURL* destinaton_URL = [NSURL URLWithString:destination];
+    
+    if(destinaton_URL){
+        if ([self shouldIntercept:destinaton_URL navigationType:UIWebViewNavigationTypeLinkClicked]) {
+            [self interceptURL:destinaton_URL];
+        }
+    }
+}
+
+-(void) handleManualDeeplinkThrough:(NSURL *)url {
+    NSDictionary* content = [url mp_queryAsDictionary];
+    NSString* destination = [content valueForKey:kMoPubClickParamDestination];
+    NSURL* destinaton_URL = [NSURL URLWithString:destination];
+    NSString* fallback = [content valueForKey:kMoPubClickParamFallback];
+    NSURL* fallback_URL = [NSURL URLWithString:fallback];
+    NSString* deeplink_tracker = [content valueForKey:kMoPubClickParamDeeplinkTracker];
+    NSURL* deeplink_tracker_URL = [NSURL URLWithString:deeplink_tracker];
+    
+    if([[UIApplication sharedApplication] canOpenURL:destinaton_URL]){
+        if(deeplink_tracker_URL){
+            //Check if we can use something more modern depending on taget ?
+            [self performSelectorInBackground:@selector(pullTrackingPixel:) withObject:deeplink_tracker_URL];
+        }
+        [self interceptURL:destinaton_URL];
+        
+    }else if(fallback_URL){
+        if ([self shouldIntercept:fallback_URL navigationType:UIWebViewNavigationTypeLinkClicked]) {
+            [self interceptURL:fallback_URL];
+        }
+    }
+    
+}
+
 #pragma mark - <MPAdDestinationDisplayAgentDelegate>
 
 - (UIViewController *)viewControllerForPresentingModalView
@@ -230,6 +276,10 @@ NSString * const kMoPubCustomHost = @"custom";
         [self.delegate adDidFinishLoadingAd:self.view];
     } else if ([host isEqualToString:kMoPubFailLoadHost]) {
         [self.delegate adDidFailToLoadAd:self.view];
+    } else if ([host isEqualToString:kMoPubJSClickThrough]) {
+        [self handleManualClickThrough:URL];
+    } else if ([host isEqualToString:kMoPubJSDeeplinkThrough]) {
+        [self handleManualDeeplinkThrough:URL];
     } else if ([host isEqualToString:kMoPubCustomHost]) {
         [self handleMoPubCustomURL:URL];
     } else {
@@ -283,6 +333,11 @@ NSString * const kMoPubCustomHost = @"custom";
 
 - (void)interceptURL:(NSURL *)URL
 {
+    //local page: we should not intercept it (used when user clicks on <a href="" onclick="stuff">)
+    if([[URL absoluteString] hasPrefix:@"applewebdata"]){
+        return;
+    }
+    
     NSURL *redirectedURL = URL;
     if (self.configuration.clickTrackingURL) {
         NSString *path = [NSString stringWithFormat:@"%@&r=%@",
@@ -358,5 +413,35 @@ NSString * const kMoPubCustomHost = @"custom";
         }
     }
 }
+
+- (void)pullTrackingPixel:(NSURL *)URL {
+    // We load as if it was a pixel, so that 302 are handled
+    if(URL){
+        NSData * pixel = [NSData dataWithContentsOfURL:URL];
+        pixel = nil;
+    }
+}
+
+- (void)injectJSHooksInWebViewContext{
+    NSString* mopubdomain = @"if(!mopub){var mopub = {};}";
+    
+    NSString* clickfunc = [NSString stringWithFormat:@"mopub.click = function(destination){\n\
+        window.location.href = \"%@://%@?%@=\"+encodeURIComponent(destination);\n\
+    }",kMoPubURLScheme,kMoPubJSClickThrough,kMoPubClickParamDestination];
+    
+    NSString* deeplinkclickfunc = [NSString stringWithFormat:@"mopub.deeplink = function(deeplink,fallback,deeplinkTracker){\n\
+        window.location.href = \"%@://%@?%@=\"+encodeURIComponent(deeplink)+\"&%@=\"+encodeURIComponent(fallback)+\"&%@=\"+encodeURIComponent(fallback);\n\
+    }",kMoPubURLScheme,kMoPubJSDeeplinkThrough,kMoPubClickParamDestination,kMoPubClickParamFallback,kMoPubClickParamDeeplinkTracker];
+
+    if(self.view){
+        NSString* garbage = [self.view stringByEvaluatingJavaScriptFromString:mopubdomain];
+        garbage = [self.view stringByEvaluatingJavaScriptFromString:clickfunc];
+        garbage = [self.view stringByEvaluatingJavaScriptFromString:deeplinkclickfunc];
+        garbage = nil;
+    }
+
+}
+
+
 
 @end
